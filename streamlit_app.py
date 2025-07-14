@@ -1,7 +1,7 @@
 import streamlit as st
+import fitz  # PyMuPDF
 import pandas as pd
 from tabula import read_pdf
-import pdfplumber
 from PIL import Image
 import io
 import os
@@ -22,130 +22,28 @@ def extract_tables_from_pdf(pdf_path):
 
 
 def extract_images_from_pdf(pdf_path):
-    """Extract images from PDF using pdfplumber (without ImageMagick)"""
+    """Extract images from PDF using PyMuPDF"""
     images = []
     try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages):
-                # Get images from the page metadata
-                if hasattr(page, 'images') and page.images:
-                    st.info(
-                        f"Found {len(page.images)} image(s) on page {page_num + 1}")
-                    for img_index, img_obj in enumerate(page.images):
-                        try:
-                            # Log image properties for debugging
-                            st.write(
-                                f"Image {img_index} properties: {img_obj}")
-
-                            # Since we can't use to_image() without ImageMagick,
-                            # we'll skip individual image extraction and recommend page conversion
-                            st.warning(
-                                f"Image extraction requires ImageMagick. Use 'Extract Pages as Images' instead.")
-
-                        except Exception as img_error:
-                            st.warning(
-                                f"Could not process image {img_index} from page {page_num + 1}: {str(img_error)}")
-                            continue
-
-        return images
-    except Exception as e:
-        st.error(f"Error extracting images: {str(e)}")
-        return []
-
-
-def extract_images_alternative_method(pdf_path):
-    """Alternative method using pdf2image for page conversion"""
-    images = []
-    try:
-        # Import pdf2image
-        from pdf2image import convert_from_path
-
-        # Convert PDF pages to images
-        pages = convert_from_path(pdf_path, dpi=150)
-
-        for page_num, page_img in enumerate(pages):
-            try:
-                # Convert PIL image to bytes
-                img_bytes = io.BytesIO()
-                page_img.save(img_bytes, format='PNG')
-                img_bytes = img_bytes.getvalue()
+        doc = fitz.open(pdf_path)
+        for page_num, page in enumerate(doc):
+            for img_index, img in enumerate(page.get_images(full=True)):
+                xref = img[0]
+                base_image = doc.extract_image(xref)
+                image_bytes = base_image["image"]
+                ext = base_image["ext"]
 
                 images.append({
                     'page': page_num + 1,
-                    'index': 0,
-                    'bytes': img_bytes,
-                    'ext': 'png',
-                    'filename': f"page_{page_num + 1}.png"
+                    'index': img_index,
+                    'bytes': image_bytes,
+                    'ext': ext,
+                    'filename': f"image_page{page_num + 1}_{img_index}.{ext}"
                 })
-            except Exception as page_error:
-                st.warning(
-                    f"Could not convert page {page_num + 1} to image: {str(page_error)}")
-                continue
-
-        return images
-    except ImportError:
-        st.error("pdf2image not installed. Using fallback method...")
-        return extract_images_fallback_method(pdf_path)
-    except Exception as e:
-        st.error(f"Error in pdf2image extraction: {str(e)}")
-        return extract_images_fallback_method(pdf_path)
-
-
-def extract_images_fallback_method(pdf_path):
-    """Fallback method using only pdfplumber text extraction"""
-    images = []
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            for page_num, page in enumerate(pdf.pages):
-                try:
-                    # Create a simple text-based representation
-                    # This is a fallback when image conversion fails
-                    page_text = page.extract_text()
-                    if page_text:
-                        # Create a simple text image using PIL
-                        from PIL import Image, ImageDraw, ImageFont
-
-                        # Create a white background
-                        img = Image.new('RGB', (800, 1000), color='white')
-                        draw = ImageDraw.Draw(img)
-
-                        # Try to use a basic font
-                        try:
-                            font = ImageFont.load_default()
-                        except:
-                            font = None
-
-                        # Write text on image
-                        y_position = 10
-                        # Limit to first 50 lines
-                        for line in page_text.split('\n')[:50]:
-                            if y_position > 950:  # Don't go beyond image height
-                                break
-                            # Limit line length
-                            draw.text((10, y_position),
-                                      line[:100], fill='black', font=font)
-                            y_position += 20
-
-                        # Convert to bytes
-                        img_bytes = io.BytesIO()
-                        img.save(img_bytes, format='PNG')
-                        img_bytes = img_bytes.getvalue()
-
-                        images.append({
-                            'page': page_num + 1,
-                            'index': 0,
-                            'bytes': img_bytes,
-                            'ext': 'png',
-                            'filename': f"page_{page_num + 1}_text.png"
-                        })
-                except Exception as page_error:
-                    st.warning(
-                        f"Could not process page {page_num + 1}: {str(page_error)}")
-                    continue
-
+        doc.close()
         return images
     except Exception as e:
-        st.error(f"Error in fallback method: {str(e)}")
+        st.error(f"Error extracting images: {str(e)}")
         return []
 
 
@@ -242,17 +140,14 @@ def main():
         st.success(f"✅ PDF uploaded successfully: {uploaded_file.name}")
 
         # Processing options
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         with col1:
             extract_tables = st.checkbox("Extract Tables", value=True)
         with col2:
             extract_images = st.checkbox("Extract Images", value=True)
-        with col3:
-            extract_pages = st.checkbox("Extract Pages as Images", value=False,
-                                        help="Convert entire pages to images")
 
         if st.button("🚀 Start Extraction", type="primary"):
-            if not extract_tables and not extract_images and not extract_pages:
+            if not extract_tables and not extract_images:
                 st.warning("Please select at least one extraction option.")
                 return
 
@@ -276,18 +171,7 @@ def main():
                     if images:
                         st.success(f"✅ Found {len(images)} images")
                     else:
-                        st.warning("⚠️ No embedded images found")
-
-                # Extract pages as images
-                if extract_pages:
-                    st.info("Converting pages to images...")
-                    page_images = extract_images_alternative_method(pdf_path)
-                    if page_images:
-                        images.extend(page_images)
-                        st.success(
-                            f"✅ Converted {len(page_images)} pages to images")
-                    else:
-                        st.warning("⚠️ Could not convert pages to images")
+                        st.warning("⚠️ No images found")
 
                 # Display results
                 if tables or images:
@@ -310,7 +194,7 @@ def main():
                                     img = Image.open(
                                         io.BytesIO(img_data['bytes']))
                                     st.image(
-                                        img, caption=f"Page {img_data['page']}", use_column_width=True)
+                                        img, caption=f"Page {img_data['page']}, Image {img_data['index'] + 1}")
                                 except Exception as e:
                                     st.error(
                                         f"Could not display image: {str(e)}")
@@ -363,10 +247,7 @@ def main():
         st.markdown("""
         ### How to use this tool:
         1. **Upload PDF**: Click "Choose a PDF file" and select your PDF document
-        2. **Select Options**: Choose extraction options:
-           - **Extract Tables**: Find and extract data tables
-           - **Extract Images**: Extract embedded images from PDF
-           - **Extract Pages as Images**: Convert entire pages to PNG images
+        2. **Select Options**: Choose whether to extract tables, images, or both
         3. **Start Extraction**: Click "Start Extraction" to process the PDF
         4. **Preview Results**: Review the extracted tables and images
         5. **Download**: Use the download buttons to get:
@@ -374,22 +255,18 @@ def main():
            - ZIP file with all extracted images
         
         ### Features:
-        - ✅ Extract tables from all pages using tabula-py
-        - ✅ Extract embedded images using pdfplumber
-        - ✅ Convert entire pages to images (useful for charts/graphics)
+        - ✅ Extract tables from all pages
+        - ✅ Extract images from all pages
         - ✅ Preview results before downloading
         - ✅ Excel file with separate sheets for tables and images
         - ✅ ZIP file with all images for easy access
         - ✅ Automatic file naming based on original PDF
-        - ✅ Cloud-compatible (no Java dependencies for images)
-        
-        ### Tips:
-        - If no embedded images are found, try "Extract Pages as Images"
-        - For PDFs with complex layouts, page extraction might work better
-        - Table extraction works best with structured tabular data
         
         ### Requirements:
-        This app uses pdfplumber for reliable image extraction on cloud platforms.
+        Make sure you have installed the required packages:
+        ```bash
+        pip install streamlit tabula-py pandas openpyxl pymupdf pillow
+        ```
         """)
 
 
