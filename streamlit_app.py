@@ -1,5 +1,5 @@
 import streamlit as st
-import fitz  # PyMuPDF
+import pymupdf  # PyMuPDF
 import pandas as pd
 from tabula import read_pdf
 from PIL import Image
@@ -25,7 +25,7 @@ def extract_images_from_pdf(pdf_path):
     """Extract images from PDF using PyMuPDF"""
     images = []
     try:
-        doc = fitz.open(pdf_path)
+        doc = pymupdf.open(pdf_path)
         for page_num, page in enumerate(doc):
             for img_index, img in enumerate(page.get_images(full=True)):
                 xref = img[0]
