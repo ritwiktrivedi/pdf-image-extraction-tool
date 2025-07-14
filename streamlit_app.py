@@ -22,64 +22,30 @@ def extract_tables_from_pdf(pdf_path):
 
 
 def extract_images_from_pdf(pdf_path):
-    """Extract images from PDF using pdfplumber"""
+    """Extract images from PDF using pdfplumber (without ImageMagick)"""
     images = []
     try:
         with pdfplumber.open(pdf_path) as pdf:
             for page_num, page in enumerate(pdf.pages):
-                # Get images from the page
+                # Get images from the page metadata
                 if hasattr(page, 'images') and page.images:
+                    st.info(
+                        f"Found {len(page.images)} image(s) on page {page_num + 1}")
                     for img_index, img_obj in enumerate(page.images):
                         try:
-                            # Extract image properties
-                            x0, y0, x1, y1 = img_obj['x0'], img_obj['y0'], img_obj['x1'], img_obj['y1']
+                            # Log image properties for debugging
+                            st.write(
+                                f"Image {img_index} properties: {img_obj}")
 
-                            # Crop the image from the page
-                            cropped_page = page.crop((x0, y0, x1, y1))
+                            # Since we can't use to_image() without ImageMagick,
+                            # we'll skip individual image extraction and recommend page conversion
+                            st.warning(
+                                f"Image extraction requires ImageMagick. Use 'Extract Pages as Images' instead.")
 
-                            # Convert to PIL Image
-                            img_pil = cropped_page.to_image(resolution=150)
-
-                            # Convert PIL image to bytes
-                            img_bytes = io.BytesIO()
-                            img_pil.save(img_bytes, format='PNG')
-                            img_bytes = img_bytes.getvalue()
-
-                            images.append({
-                                'page': page_num + 1,
-                                'index': img_index,
-                                'bytes': img_bytes,
-                                'ext': 'png',
-                                'filename': f"image_page{page_num + 1}_{img_index}.png"
-                            })
                         except Exception as img_error:
                             st.warning(
-                                f"Could not extract image {img_index} from page {page_num + 1}: {str(img_error)}")
+                                f"Could not process image {img_index} from page {page_num + 1}: {str(img_error)}")
                             continue
-
-                # Alternative method: try to extract figures/charts
-                try:
-                    # Convert entire page to image if no specific images found
-                    if not (hasattr(page, 'images') and page.images):
-                        # Check if page has visual content by looking for drawings/figures
-                        if page.figures or page.curves or page.rects:
-                            # Create image from page
-                            img_pil = page.to_image(resolution=150)
-
-                            # Convert PIL image to bytes
-                            img_bytes = io.BytesIO()
-                            img_pil.save(img_bytes, format='PNG')
-                            img_bytes = img_bytes.getvalue()
-
-                            images.append({
-                                'page': page_num + 1,
-                                'index': 0,
-                                'bytes': img_bytes,
-                                'ext': 'png',
-                                'filename': f"page_{page_num + 1}_visual_content.png"
-                            })
-                except Exception as page_error:
-                    continue
 
         return images
     except Exception as e:
@@ -88,35 +54,98 @@ def extract_images_from_pdf(pdf_path):
 
 
 def extract_images_alternative_method(pdf_path):
-    """Alternative method to extract images by converting pages to images"""
+    """Alternative method using pdf2image for page conversion"""
+    images = []
+    try:
+        # Import pdf2image
+        from pdf2image import convert_from_path
+
+        # Convert PDF pages to images
+        pages = convert_from_path(pdf_path, dpi=150)
+
+        for page_num, page_img in enumerate(pages):
+            try:
+                # Convert PIL image to bytes
+                img_bytes = io.BytesIO()
+                page_img.save(img_bytes, format='PNG')
+                img_bytes = img_bytes.getvalue()
+
+                images.append({
+                    'page': page_num + 1,
+                    'index': 0,
+                    'bytes': img_bytes,
+                    'ext': 'png',
+                    'filename': f"page_{page_num + 1}.png"
+                })
+            except Exception as page_error:
+                st.warning(
+                    f"Could not convert page {page_num + 1} to image: {str(page_error)}")
+                continue
+
+        return images
+    except ImportError:
+        st.error("pdf2image not installed. Using fallback method...")
+        return extract_images_fallback_method(pdf_path)
+    except Exception as e:
+        st.error(f"Error in pdf2image extraction: {str(e)}")
+        return extract_images_fallback_method(pdf_path)
+
+
+def extract_images_fallback_method(pdf_path):
+    """Fallback method using only pdfplumber text extraction"""
     images = []
     try:
         with pdfplumber.open(pdf_path) as pdf:
             for page_num, page in enumerate(pdf.pages):
                 try:
-                    # Convert page to image
-                    img_pil = page.to_image(resolution=150)
+                    # Create a simple text-based representation
+                    # This is a fallback when image conversion fails
+                    page_text = page.extract_text()
+                    if page_text:
+                        # Create a simple text image using PIL
+                        from PIL import Image, ImageDraw, ImageFont
 
-                    # Convert PIL image to bytes
-                    img_bytes = io.BytesIO()
-                    img_pil.save(img_bytes, format='PNG')
-                    img_bytes = img_bytes.getvalue()
+                        # Create a white background
+                        img = Image.new('RGB', (800, 1000), color='white')
+                        draw = ImageDraw.Draw(img)
 
-                    images.append({
-                        'page': page_num + 1,
-                        'index': 0,
-                        'bytes': img_bytes,
-                        'ext': 'png',
-                        'filename': f"page_{page_num + 1}.png"
-                    })
+                        # Try to use a basic font
+                        try:
+                            font = ImageFont.load_default()
+                        except:
+                            font = None
+
+                        # Write text on image
+                        y_position = 10
+                        # Limit to first 50 lines
+                        for line in page_text.split('\n')[:50]:
+                            if y_position > 950:  # Don't go beyond image height
+                                break
+                            # Limit line length
+                            draw.text((10, y_position),
+                                      line[:100], fill='black', font=font)
+                            y_position += 20
+
+                        # Convert to bytes
+                        img_bytes = io.BytesIO()
+                        img.save(img_bytes, format='PNG')
+                        img_bytes = img_bytes.getvalue()
+
+                        images.append({
+                            'page': page_num + 1,
+                            'index': 0,
+                            'bytes': img_bytes,
+                            'ext': 'png',
+                            'filename': f"page_{page_num + 1}_text.png"
+                        })
                 except Exception as page_error:
                     st.warning(
-                        f"Could not convert page {page_num + 1} to image: {str(page_error)}")
+                        f"Could not process page {page_num + 1}: {str(page_error)}")
                     continue
 
         return images
     except Exception as e:
-        st.error(f"Error in alternative image extraction: {str(e)}")
+        st.error(f"Error in fallback method: {str(e)}")
         return []
 
 
